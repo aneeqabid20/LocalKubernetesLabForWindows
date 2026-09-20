@@ -1,0 +1,12 @@
+[Unit]
+Description=K8sLab persistent network namespace for node02
+After=systemd-modules-load.service systemd-sysctl.service
+Before=containerd.service kubelet.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/k8slab-worker-network.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

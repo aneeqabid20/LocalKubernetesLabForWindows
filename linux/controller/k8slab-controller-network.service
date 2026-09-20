@@ -1,0 +1,12 @@
+[Unit]
+Description=K8sLab persistent WSL controller network
+After=systemd-modules-load.service
+Before=kubelet.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/k8slab-controller-network.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

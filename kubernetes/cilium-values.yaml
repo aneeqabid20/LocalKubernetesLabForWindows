@@ -1,0 +1,23 @@
+routingMode: native
+
+ipv4NativeRoutingCIDR: 10.244.0.0/16
+
+autoDirectNodeRoutes: true
+
+ipam:
+  mode: kubernetes
+
+k8s:
+  requireIPv4PodCIDR: true
+
+kubeProxyReplacement: false
+
+operator:
+  replicas: 1
+
+hubble:
+  relay:
+    enabled: true
+
+  ui:
+    enabled: true

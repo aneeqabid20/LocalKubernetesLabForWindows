@@ -1,0 +1,27 @@
+# WSL runtime data must never be committed
+*.vhdx
+*.tar
+*.tar.gz
+
+# Kubernetes credentials
+admin.conf
+*.kubeconfig
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# PowerShell
+*.ps1xml
+
+# Editors
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Runtime state
+artifacts/runtime/
