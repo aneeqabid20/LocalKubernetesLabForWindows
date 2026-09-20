@@ -4,6 +4,10 @@ A real **kubeadm-based, three-node Kubernetes lab on Windows 11 using WSL2**.
 
 It is intended for Kubernetes certification practice and hands-on work with kubeadm, containerd, CNI, cluster upgrades, etcd, troubleshooting, node networking, and cluster recovery without cloud cost.
 
+## Prerequisites
+
+Before cloning or building the lab, complete the [Windows and WSL prerequisites](docs/PREREQUISITES.md).
+
 ## Lab topology
 
 | Node | Role | Kubernetes | Lab IP |
