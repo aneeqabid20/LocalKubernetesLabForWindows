@@ -18,7 +18,7 @@ Required:
 Open PowerShell as Administrator:
 
 ```powershell
-wsl --install
+wsl --install --no-distribution
 wsl --update
 wsl --set-default-version 2
 ```
