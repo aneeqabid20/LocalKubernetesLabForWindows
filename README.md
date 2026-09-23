@@ -125,6 +125,32 @@ Root shell:
 
 On WSL2 this opens a native WSL node console; no SSH daemon is required.
 
+## Infrastructure-only setup
+
+For manual kubeadm practice, prepare the three WSL nodes, containerd, Kubernetes packages, networking, and persistence without creating the Kubernetes cluster:
+
+```powershell
+.\lab.ps1 setup -SkipKubernetes
+```
+
+This mode still performs:
+
+1. preflight checks
+2. WSL distro creation
+3. node provisioning
+4. containerd and kubelet preparation
+5. worker network namespace and persistent networking setup
+6. node startup
+
+It intentionally skips:
+
+- `kubeadm init`
+- worker `kubeadm join`
+- Cilium and Hubble installation
+- Kubernetes functional verification
+
+The prepared nodes can then be used for manual kubeadm and CNI practice.
+
 ## Rebuild
 
 Preview:

@@ -8,6 +8,7 @@ param(
 
     [switch]$ReplaceExisting,
     [switch]$SkipVerify,
+    [switch]$SkipKubernetes,
     [switch]$PlanOnly
 )
 
@@ -29,14 +30,10 @@ $BootstrapScript = Join-Path $ScriptsDir "bootstrap-kubernetes.ps1"
 $CiliumScript    = Join-Path $ScriptsDir "install-cilium.ps1"
 $VerifyScript    = Join-Path $ScriptsDir "verify.ps1"
 
-
 function Write-Step {
     param(
-        [Parameter(Mandatory)]
-        [int]$Number,
-
-        [Parameter(Mandatory)]
-        [string]$Title
+        [Parameter(Mandatory)][int]$Number,
+        [Parameter(Mandatory)][string]$Title
     )
 
     Write-Host ""
@@ -45,11 +42,6 @@ function Write-Step {
     Write-Host "========================================"
     Write-Host ""
 }
-
-
-#
-# Validate required repository scripts before doing anything.
-#
 
 $RequiredScripts = @(
     $PreflightScript,
@@ -62,12 +54,10 @@ $RequiredScripts = @(
 )
 
 foreach ($Script in $RequiredScripts) {
-
     if (-not (Test-Path -LiteralPath $Script)) {
         throw "Required script not found: $Script"
     }
 }
-
 
 Write-Host ""
 Write-Host "========================================"
@@ -79,13 +69,9 @@ Write-Host "Repository    : $Repo"
 Write-Host "Source distro : $SourceDistro"
 Write-Host "Runtime root  : $RuntimeRoot"
 Write-Host "Replace       : $ReplaceExisting"
-Write-Host "Verify        : $(-not $SkipVerify)"
+Write-Host "Verify        : $(-not $SkipVerify -and -not $SkipKubernetes)"
+Write-Host "Kubernetes    : $(-not $SkipKubernetes)"
 Write-Host ""
-
-
-#
-# Planning mode must not change the host.
-#
 
 if ($PlanOnly) {
 
@@ -103,14 +89,22 @@ if ($PlanOnly) {
 
     Write-Host "3. Provision containerd, Kubernetes packages, node configuration and persistence"
     Write-Host "4. Start controller/worker WSL infrastructure"
-    Write-Host "5. Initialize Kubernetes and join both workers"
-    Write-Host "6. Install Cilium and Hubble"
 
-    if ($SkipVerify) {
-        Write-Host "7. Skip functional verification"
+    if ($SkipKubernetes) {
+        Write-Host "5. Skip Kubernetes cluster bootstrap"
+        Write-Host "6. Skip Cilium and Hubble"
+        Write-Host "7. Skip Kubernetes functional verification"
     }
     else {
-        Write-Host "7. Run full functional verification"
+        Write-Host "5. Initialize Kubernetes and join both workers"
+        Write-Host "6. Install Cilium and Hubble"
+
+        if ($SkipVerify) {
+            Write-Host "7. Skip functional verification"
+        }
+        else {
+            Write-Host "7. Run full functional verification"
+        }
     }
 
     Write-Host ""
@@ -118,26 +112,10 @@ if ($PlanOnly) {
     return
 }
 
+Write-Step -Number 1 -Title "Preflight"
+& $PreflightScript -SourceDistro $SourceDistro
 
-#
-# Step 1
-#
-
-Write-Step `
-    -Number 1 `
-    -Title "Preflight"
-
-& $PreflightScript `
-    -SourceDistro $SourceDistro
-
-
-#
-# Step 2
-#
-
-Write-Step `
-    -Number 2 `
-    -Title "Create WSL Distros"
+Write-Step -Number 2 -Title "Create WSL Distros"
 
 $CreateArguments = @{
     SourceDistro = $SourceDistro
@@ -150,76 +128,39 @@ if ($ReplaceExisting) {
 
 & $CreateScript @CreateArguments
 
-
-#
-# Step 3
-#
-
-Write-Step `
-    -Number 3 `
-    -Title "Provision Nodes"
-
+Write-Step -Number 3 -Title "Provision Nodes"
 & $ProvisionScript
 
+Write-Step -Number 4 -Title "Start WSL Infrastructure"
+& $StartScript -SkipKubernetesWait
 
-#
-# Step 4
-#
-# Freshly provisioned nodes do not have kubeadm state yet.
-# Start only the persistent WSL/network/runtime infrastructure.
-#
+if ($SkipKubernetes) {
 
-Write-Step `
-    -Number 4 `
-    -Title "Start WSL Infrastructure"
+    Write-Host ""
+    Write-Host "========================================"
+    Write-Host " Infrastructure setup completed"
+    Write-Host " Kubernetes bootstrap was skipped"
+    Write-Host "========================================"
+    Write-Host ""
+    return
+}
 
-& $StartScript `
-    -SkipKubernetesWait
-
-
-#
-# Step 5
-#
-
-Write-Step `
-    -Number 5 `
-    -Title "Bootstrap Kubernetes"
-
+Write-Step -Number 5 -Title "Bootstrap Kubernetes"
 & $BootstrapScript
 
-
-#
-# Step 6
-#
-
-Write-Step `
-    -Number 6 `
-    -Title "Install Cilium"
-
+Write-Step -Number 6 -Title "Install Cilium"
 & $CiliumScript
-
-
-#
-# Step 7
-#
 
 if (-not $SkipVerify) {
 
-    Write-Step `
-        -Number 7 `
-        -Title "Verify Cluster"
-
+    Write-Step -Number 7 -Title "Verify Cluster"
     & $VerifyScript
 }
 else {
 
-    Write-Step `
-        -Number 7 `
-        -Title "Verification Skipped"
-
+    Write-Step -Number 7 -Title "Verification Skipped"
     Write-Host "[k8slab] verification skipped by request"
 }
-
 
 Write-Host ""
 Write-Host "========================================"

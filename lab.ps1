@@ -24,7 +24,8 @@ param(
     [switch]$Root,
     [switch]$ReplaceExisting,
     [switch]$PlanOnly,
-    [switch]$SkipVerify
+    [switch]$SkipVerify,
+    [switch]$SkipKubernetes
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +58,7 @@ switch ($Action) {
             PlanOnly        = $PlanOnly
             ReplaceExisting = $ReplaceExisting
             SkipVerify      = $SkipVerify
+            SkipKubernetes  = $SkipKubernetes
         }
     }
 
