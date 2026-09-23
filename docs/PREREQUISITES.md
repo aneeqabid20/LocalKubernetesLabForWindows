@@ -155,19 +155,3 @@ git clone https://github.com/aneeqabid20/LocalKubernetesLabForWindows.git
 
 cd LocalKubernetesLabForWindows
 ```
-
-## 8. Validate prerequisites and build
-
-Run the repository preflight first:
-
-```powershell
-.\lab.ps1 preflight
-```
-
-Then build the complete lab:
-
-```powershell
-.\lab.ps1 setup
-```
-
-The setup workflow creates and configures the three Kubernetes WSL distributions automatically. Do not manually create the controller or worker distributions before running setup.
