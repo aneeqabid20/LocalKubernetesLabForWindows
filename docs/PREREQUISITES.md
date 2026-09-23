@@ -34,15 +34,46 @@ wsl --status
 
 ## 2. Configure WSL resources
 
-Create or update:
+WSL2 runs Linux distributions inside a lightweight virtual machine.
+
+The Windows file:
 
 ```text
 %USERPROFILE%\.wslconfig
 ```
 
-Recommended configuration used by this lab:
+controls the CPU, memory, and swap available to that WSL2 virtual machine.
+These settings apply globally to WSL2 distributions on the Windows host.
+
+For this lab, configure WSL2 with:
 
 ```ini
+[wsl2]
+processors=6
+memory=10GB
+swap=0
+```
+
+Create or overwrite the file from PowerShell:
+
+```powershell
+@"
+[wsl2]
+processors=6
+memory=10GB
+swap=0
+"@ | Set-Content "$HOME\.wslconfig" -Encoding ASCII
+```
+
+Verify the file:
+
+```powershell
+Get-Content "$HOME\.wslconfig"
+```
+
+Expected output:
+
+```text
 [wsl2]
 processors=6
 memory=10GB
@@ -54,6 +85,16 @@ Apply the configuration:
 ```powershell
 wsl --shutdown
 ```
+
+The settings take effect the next time WSL2 starts.
+
+For this lab:
+
+- `processors=6` allows WSL2 to use up to 6 logical processors.
+- `memory=10GB` allows WSL2 to use up to 10 GB of RAM.
+- `swap=0` disables WSL swap.
+
+The three Kubernetes lab nodes share the underlying WSL2 virtual machine, so sufficient CPU and memory should be allocated to WSL.
 
 ## 3. Install the clean Ubuntu source distribution
 
