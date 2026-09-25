@@ -240,7 +240,7 @@ function Initialize-ControllerKnownHosts {
         $ScanCommand = (
             "umask 077; " +
             "ssh-keyscan -T 5 -H $WorkerIP " +
-            ">> /home/ubuntu/.ssh/known_hosts"
+            "2>/dev/null >> /home/ubuntu/.ssh/known_hosts"
         )
 
         & wsl.exe `
