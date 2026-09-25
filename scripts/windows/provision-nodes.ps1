@@ -209,6 +209,89 @@ function Invoke-NodeProvision {
 }
 
 
+
+function Set-ControllerKnownHostFromWorker {
+    param(
+        [Parameter(Mandatory)]
+        [string]$WorkerDistro,
+
+        [Parameter(Mandatory)]
+        [string]$WorkerIP
+    )
+
+    $HostKeyOutput = @(
+        & wsl.exe `
+            -d $WorkerDistro `
+            -u root `
+            -- `
+            cat /etc/ssh/ssh_host_ed25519_key.pub
+    )
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to read ED25519 SSH host key from $WorkerDistro."
+    }
+
+    $HostKey = (
+        $HostKeyOutput -join ""
+    ).Trim()
+
+    $HostKeyParts = @(
+        $HostKey -split '\s+'
+    )
+
+    if (
+        $HostKeyParts.Count -lt 2 -or
+        $HostKeyParts[0] -ne "ssh-ed25519" -or
+        [string]::IsNullOrWhiteSpace($HostKeyParts[1])
+    ) {
+        throw "Invalid ED25519 SSH host key returned by $WorkerDistro."
+    }
+
+    $KnownHostLine = (
+        "$WorkerIP $($HostKeyParts[0]) $($HostKeyParts[1])"
+    )
+
+    $KnownHostLineB64 = [Convert]::ToBase64String(
+        [System.Text.Encoding]::UTF8.GetBytes($KnownHostLine)
+    )
+
+    $InstallCommand = (
+        "set -eu; " +
+        "install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.ssh; " +
+        "touch /home/ubuntu/.ssh/known_hosts; " +
+        "ssh-keygen -q -f /home/ubuntu/.ssh/known_hosts -R '$WorkerIP' >/dev/null 2>&1 || true; " +
+        "printf '%s' '$KnownHostLineB64' | base64 --decode >> /home/ubuntu/.ssh/known_hosts; " +
+        "printf '\n' >> /home/ubuntu/.ssh/known_hosts; " +
+        "chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts; " +
+        "chmod 0600 /home/ubuntu/.ssh/known_hosts"
+    )
+
+    & wsl.exe `
+        -d $Lab.WSL.Controller `
+        -u root `
+        -- `
+        /bin/sh -c $InstallCommand
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to install SSH host key for $WorkerIP on the controller."
+    }
+
+    & wsl.exe `
+        -d $Lab.WSL.Controller `
+        -u ubuntu `
+        -- `
+        ssh-keygen `
+        -F $WorkerIP `
+        -f /home/ubuntu/.ssh/known_hosts `
+        1>$null `
+        2>$null
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Controller known_hosts validation failed for $WorkerIP."
+    }
+
+    Write-Host "[PASS] controller known_hosts pinned for $WorkerIP"
+}
 #
 # --------------------------------------------------------------------
 # Derive repository tracks from software.psd1.
@@ -256,6 +339,7 @@ $Nodes = @(
         Distro           = $Lab.WSL.Controller
         Hostname         = $Lab.Nodes.Controller.Hostname
         FQDN             = $Lab.Nodes.Controller.FQDN
+        IP               = $Lab.Nodes.Controller.IP
 
         KubeadmPackage   = $Software.Kubernetes.PackageVersion35
         KubeletPackage   = $Software.Kubernetes.PackageVersion35
@@ -274,6 +358,7 @@ $Nodes = @(
         Distro           = $Lab.WSL.Node01
         Hostname         = $Lab.Nodes.Node01.Hostname
         FQDN             = $Lab.Nodes.Node01.FQDN
+        IP               = $Lab.Nodes.Node01.IP
 
         KubeadmPackage   = $Software.Kubernetes.PackageVersion35
         KubeletPackage   = $Software.Kubernetes.PackageVersion35
@@ -292,6 +377,7 @@ $Nodes = @(
         Distro           = $Lab.WSL.Node02
         Hostname         = $Lab.Nodes.Node02.Hostname
         FQDN             = $Lab.Nodes.Node02.FQDN
+        IP               = $Lab.Nodes.Node02.IP
 
         KubeadmPackage   = $Software.Kubernetes.PackageVersion35
         KubeletPackage   = $Software.Kubernetes.PackageVersion34
@@ -556,6 +642,10 @@ foreach ($Node in @(
         -Node $Node `
         -RepoLinux $RepoLinux `
         -ControllerPublicKeyB64 $ControllerPublicKeyB64
+
+    Set-ControllerKnownHostFromWorker `
+        -WorkerDistro $Node.Distro `
+        -WorkerIP $Node.IP
 }
 
 

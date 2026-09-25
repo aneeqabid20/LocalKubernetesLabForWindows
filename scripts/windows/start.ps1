@@ -197,62 +197,9 @@ function Wait-Service {
 }
 
 
-function Initialize-ControllerKnownHosts {
-
-    & wsl.exe `
-        -d $Controller `
-        -u root `
-        -- `
-        install `
-        -d `
-        -m 0700 `
-        -o ubuntu `
-        -g ubuntu `
-        /home/ubuntu/.ssh
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to prepare controller SSH directory."
-    }
+function Assert-ControllerKnownHosts {
 
     foreach ($WorkerIP in @($Node01IP, $Node02IP)) {
-
-        & wsl.exe `
-            -d $Controller `
-            -u $SshUser `
-            -- `
-            test -f /home/ubuntu/.ssh/known_hosts `
-            2>$null
-
-        if ($LASTEXITCODE -eq 0) {
-
-            & wsl.exe `
-                -d $Controller `
-                -u $SshUser `
-                -- `
-                ssh-keygen `
-                -q `
-                -f /home/ubuntu/.ssh/known_hosts `
-                -R $WorkerIP `
-                1>$null `
-                2>$null
-        }
-
-        $ScanCommand = (
-            "umask 077; " +
-            "ssh-keyscan -T 5 -H $WorkerIP " +
-            "2>/dev/null >> /home/ubuntu/.ssh/known_hosts"
-        )
-
-        & wsl.exe `
-            -d $Controller `
-            -u $SshUser `
-            -- `
-            /bin/sh -c $ScanCommand `
-            2>$null
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "Unable to collect SSH host key for $WorkerIP."
-        }
 
         & wsl.exe `
             -d $Controller `
@@ -265,25 +212,12 @@ function Initialize-ControllerKnownHosts {
             2>$null
 
         if ($LASTEXITCODE -ne 0) {
-            throw "Controller known_hosts does not contain $WorkerIP."
+            throw "Controller known_hosts does not contain $WorkerIP. Re-run provisioning."
         }
     }
 
-    & wsl.exe `
-        -d $Controller `
-        -u root `
-        -- `
-        chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts
-
-    & wsl.exe `
-        -d $Controller `
-        -u root `
-        -- `
-        chmod 0600 /home/ubuntu/.ssh/known_hosts
-
-    Write-Host "[k8slab] controller SSH known_hosts updated"
+    Write-Host "[k8slab] controller SSH known_hosts ready"
 }
-
 
 function Invoke-ControllerSsh {
     param(
@@ -329,33 +263,36 @@ function Assert-WorkerSshAccess {
 
     foreach ($Worker in $Workers) {
 
-        $HostnameResult = Invoke-ControllerSsh `
-            -WorkerIP $Worker.IP `
-            -RemoteCommand "hostname"
+        Wait-Condition `
+            -TimeoutSeconds $WorkerTimeoutSeconds `
+            -Description "SSH $SshUser@$($Worker.IP)" `
+            -Condition {
 
-        $ActualHostname = (
-            $HostnameResult.Output -join ""
-        ).Trim()
+                $HostnameResult = Invoke-ControllerSsh `
+                    -WorkerIP $Worker.IP `
+                    -RemoteCommand "hostname"
 
-        if (
-            $HostnameResult.ExitCode -ne 0 -or
-            $ActualHostname -ne $Worker.Hostname
-        ) {
-            throw "SSH validation failed for $($Worker.IP): expected hostname '$($Worker.Hostname)', got '$ActualHostname'."
-        }
+                $ActualHostname = (
+                    $HostnameResult.Output -join ""
+                ).Trim()
 
-        $SudoResult = Invoke-ControllerSsh `
-            -WorkerIP $Worker.IP `
-            -RemoteCommand "sudo -n true"
+                if (
+                    $HostnameResult.ExitCode -ne 0 -or
+                    $ActualHostname -ne $Worker.Hostname
+                ) {
+                    return $false
+                }
 
-        if ($SudoResult.ExitCode -ne 0) {
-            throw "Passwordless sudo validation failed for $($Worker.IP)."
-        }
+                $SudoResult = Invoke-ControllerSsh `
+                    -WorkerIP $Worker.IP `
+                    -RemoteCommand "sudo -n true"
+
+                return ($SudoResult.ExitCode -eq 0)
+            }
 
         Write-Host "[k8slab] SSH ready: $SshUser@$($Worker.IP) -> $($Worker.Hostname)"
     }
 }
-
 
 function Test-KubeletConfigured {
     param(
@@ -463,7 +400,7 @@ try {
         }
     }
 
-    Initialize-ControllerKnownHosts
+    Assert-ControllerKnownHosts
     Assert-WorkerSshAccess
 
     Write-Host ""
