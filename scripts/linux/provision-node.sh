@@ -89,6 +89,10 @@ case "${ROLE}" in
         ;;
 esac
 
+if [[ "${ROLE}" != "controller" ]]; then
+    require_env CONTROLLER_PUBLIC_KEY_B64
+fi
+
 
 #
 # Architecture guard.
@@ -239,7 +243,16 @@ apt-get install -y \
     socat \
     ethtool \
     ebtables \
-    ipset
+    ipset \
+    openssh-client
+
+if [[ "${ROLE}" != "controller" ]]; then
+    log "installing OpenSSH server for worker node access"
+
+    apt-get install -y \
+        openssh-server \
+        sudo
+fi
 
 
 #
@@ -472,6 +485,99 @@ fi
 
 #
 # --------------------------------------------------------------------
+# Lab SSH access
+# --------------------------------------------------------------------
+#
+# The controller owns the lab SSH key. Workers receive that public key
+# through provision-nodes.ps1 so controller -> worker access requires no
+# password or manual key copying.
+#
+
+install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.ssh
+
+if [[ "${ROLE}" == "controller" ]]; then
+
+    CONTROLLER_SSH_KEY="/home/ubuntu/.ssh/id_ed25519"
+    CONTROLLER_SSH_PUB="${CONTROLLER_SSH_KEY}.pub"
+
+    if [[ ! -f "${CONTROLLER_SSH_KEY}" ]]; then
+        log "generating controller lab SSH key"
+
+        runuser -u ubuntu -- \
+            ssh-keygen \
+                -q \
+                -t ed25519 \
+                -N '' \
+                -f "${CONTROLLER_SSH_KEY}"
+    elif [[ ! -f "${CONTROLLER_SSH_PUB}" ]]; then
+        log "rebuilding missing controller SSH public key"
+
+        ssh-keygen -y -f "${CONTROLLER_SSH_KEY}" \
+            > "${CONTROLLER_SSH_PUB}"
+    fi
+
+    chown ubuntu:ubuntu \
+        "${CONTROLLER_SSH_KEY}" \
+        "${CONTROLLER_SSH_PUB}"
+
+    chmod 0600 "${CONTROLLER_SSH_KEY}"
+    chmod 0644 "${CONTROLLER_SSH_PUB}"
+
+else
+
+    CONTROLLER_PUBLIC_KEY="$(
+        printf '%s' "${CONTROLLER_PUBLIC_KEY_B64}" |
+            base64 --decode
+    )"
+
+    [[ "${CONTROLLER_PUBLIC_KEY}" == ssh-ed25519\ * ]] ||
+        die "controller SSH public key is not an ed25519 public key"
+
+    AUTHORIZED_KEYS="/home/ubuntu/.ssh/authorized_keys"
+
+    touch "${AUTHORIZED_KEYS}"
+
+    if ! grep -Fqx "${CONTROLLER_PUBLIC_KEY}" "${AUTHORIZED_KEYS}"; then
+        printf '%s\n' "${CONTROLLER_PUBLIC_KEY}" \
+            >> "${AUTHORIZED_KEYS}"
+    fi
+
+    chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+    chmod 0700 /home/ubuntu/.ssh
+    chmod 0600 "${AUTHORIZED_KEYS}"
+
+    SUDOERS_FILE="/etc/sudoers.d/90-k8slab-ubuntu"
+    SUDOERS_TMP="${TMPDIR_K8SLAB}/90-k8slab-ubuntu"
+
+    printf '%s\n' \
+        'ubuntu ALL=(ALL) NOPASSWD:ALL' \
+        > "${SUDOERS_TMP}"
+
+    chmod 0440 "${SUDOERS_TMP}"
+
+    visudo -cf "${SUDOERS_TMP}" >/dev/null ||
+        die "generated passwordless sudo configuration is invalid"
+
+    install -o root -g root -m 0440 \
+        "${SUDOERS_TMP}" \
+        "${SUDOERS_FILE}"
+
+    visudo -cf "${SUDOERS_FILE}" >/dev/null ||
+        die "installed passwordless sudo configuration is invalid"
+
+    # Ubuntu 24.04 may expose OpenSSH through ssh.socket. The worker
+    # listener must instead be a real ssh.service process placed inside
+    # the dedicated worker network namespace.
+    systemctl disable --now ssh.socket >/dev/null 2>&1 || true
+    systemctl mask ssh.socket >/dev/null 2>&1 || true
+    systemctl unmask ssh.service >/dev/null 2>&1 || true
+
+    ssh-keygen -A >/dev/null
+fi
+
+
+#
+# --------------------------------------------------------------------
 # Proven WSL persistence configuration
 # --------------------------------------------------------------------
 #
@@ -515,6 +621,10 @@ else
         /etc/systemd/system/kubelet.service.d/20-wsl-netns.conf
 
     install -D -m 0644 \
+        "${WORKER_REPO}/30-netns-ssh.conf" \
+        /etc/systemd/system/ssh.service.d/30-netns-ssh.conf
+
+    install -D -m 0644 \
         "${WORKER_REPO}/99-k8slab-inotify.conf" \
         /etc/sysctl.d/99-k8slab-inotify.conf
 
@@ -545,6 +655,9 @@ else
     systemctl enable \
         k8slab-netns.service
 
+    systemctl enable \
+        ssh.service
+
 fi
 
 
@@ -558,8 +671,16 @@ fi
 systemctl stop kubelet.service >/dev/null 2>&1 || true
 systemctl stop containerd.service >/dev/null 2>&1 || true
 
+if [[ "${ROLE}" != "controller" ]]; then
+    systemctl stop ssh.service >/dev/null 2>&1 || true
+fi
+
 systemctl reset-failed kubelet.service >/dev/null 2>&1 || true
 systemctl reset-failed containerd.service >/dev/null 2>&1 || true
+
+if [[ "${ROLE}" != "controller" ]]; then
+    systemctl reset-failed ssh.service >/dev/null 2>&1 || true
+fi
 
 
 #
@@ -587,6 +708,27 @@ fi
 grep -n \
     'SystemdCgroup' \
     /etc/containerd/config.toml
+
+if [[ "${ROLE}" == "controller" ]]; then
+    [[ -s /home/ubuntu/.ssh/id_ed25519 ]] ||
+        die "controller SSH private key is missing"
+
+    [[ -s /home/ubuntu/.ssh/id_ed25519.pub ]] ||
+        die "controller SSH public key is missing"
+else
+    [[ -s /home/ubuntu/.ssh/authorized_keys ]] ||
+        die "worker authorized_keys is missing"
+
+    visudo -cf /etc/sudoers.d/90-k8slab-ubuntu >/dev/null ||
+        die "worker passwordless sudo configuration is invalid"
+
+    systemctl is-enabled --quiet ssh.service ||
+        die "ssh.service is not enabled"
+
+    if [[ "$(systemctl is-enabled ssh.socket 2>/dev/null || true)" != "masked" ]]; then
+        die "ssh.socket is not masked"
+    fi
+fi
 
 echo
 log "${ROLE} provisioning completed successfully"

@@ -1,7 +1,7 @@
 [Unit]
 Description=K8sLab persistent network namespace for node01
 After=systemd-modules-load.service systemd-sysctl.service
-Before=containerd.service kubelet.service
+Before=containerd.service kubelet.service ssh.service
 
 [Service]
 Type=oneshot

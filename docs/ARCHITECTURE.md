@@ -33,7 +33,7 @@ Worker namespaces:
 
 ## Worker process placement
 
-Worker containerd and kubelet systemd units use:
+Worker containerd, kubelet, and OpenSSH services are ordered after the persistent worker network namespace. Containerd and kubelet use:
 
 ```text
 NetworkNamespacePath=/run/netns/<worker-namespace>
@@ -41,6 +41,21 @@ PrivateMounts=no
 ```
 
 This puts node networking in the worker namespace while preserving mount visibility required by Kubernetes.
+
+OpenSSH uses a dedicated systemd drop-in with:
+
+```text
+NetworkNamespacePath=/run/netns/<worker-namespace>
+```
+
+Ubuntu SSH socket activation is disabled and `ssh.service` is used directly. The controller owns a lab-local ed25519 key, installs its public key in both workers, and maintains `known_hosts` for `192.168.250.2` and `192.168.250.3`. The worker `ubuntu` user has passwordless sudo because this is a disposable certification-training environment.
+
+This provides the stable Linux-side interface required by node-level practice labs:
+
+```bash
+ssh ubuntu@192.168.250.2 ...
+ssh ubuntu@192.168.250.3 ...
+```
 
 ## kubeadm join
 
@@ -79,7 +94,9 @@ Persistent systemd services recreate them automatically:
 - controller: `k8slab-controller-network.service`
 - workers: `k8slab-netns.service`
 
-`start.ps1` starts the controller first, waits for the bridge, then starts the workers. For an initialized cluster it waits for the Kubernetes API, node readiness, and Cilium health.
+Worker `containerd.service`, `kubelet.service`, and `ssh.service` depend on the namespace service. Their systemd drop-ins use `PartOf=k8slab-netns.service`, so an explicit namespace-service restart also restarts those processes and reattaches them to the current namespace.
+
+`start.ps1` starts the controller first, waits for the bridge, then starts the workers. It waits for worker SSH, refreshes the controller's worker host keys, and verifies passwordless controller-to-worker SSH before declaring WSL infrastructure ready. For an initialized cluster it then waits for the Kubernetes API, node readiness, and Cilium health.
 
 ## WSL kernel constraint
 

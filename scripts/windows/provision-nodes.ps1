@@ -111,7 +111,9 @@ function Invoke-NodeProvision {
         [hashtable]$Node,
 
         [Parameter(Mandatory)]
-        [string]$RepoLinux
+        [string]$RepoLinux,
+
+        [string]$ControllerPublicKeyB64 = ""
     )
 
     Write-Host ""
@@ -166,6 +168,16 @@ function Invoke-NodeProvision {
 
         $Environment += `
             "CILIUM_CLI_SHA256=$($Software.CiliumCLI.Sha256)"
+    }
+
+    if ($Node.Role -ne "controller") {
+
+        if ([string]::IsNullOrWhiteSpace($ControllerPublicKeyB64)) {
+            throw "Controller SSH public key was not supplied for $($Node.Role)."
+        }
+
+        $Environment += `
+            "CONTROLLER_PUBLIC_KEY_B64=$ControllerPublicKeyB64"
     }
 
 
@@ -496,11 +508,54 @@ Write-Host "[k8slab] repository inside WSL: $RepoLinux"
 # --------------------------------------------------------------------
 #
 
-foreach ($Node in $Nodes) {
+$ControllerNode = @(
+    $Nodes |
+        Where-Object {
+            $_.Role -eq "controller"
+        }
+)[0]
+
+Invoke-NodeProvision `
+    -Node $ControllerNode `
+    -RepoLinux $RepoLinux
+
+$ControllerPublicKeyOutput = @(
+    & wsl.exe `
+        -d $Lab.WSL.Controller `
+        -u root `
+        -- `
+        cat /home/ubuntu/.ssh/id_ed25519.pub
+)
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to read controller SSH public key after provisioning."
+}
+
+$ControllerPublicKey = (
+    $ControllerPublicKeyOutput -join ""
+).Trim()
+
+if ($ControllerPublicKey -notmatch '^ssh-ed25519\s+') {
+    throw "Controller SSH public key is not a valid ed25519 public key."
+}
+
+$ControllerPublicKeyB64 = [Convert]::ToBase64String(
+    [System.Text.Encoding]::UTF8.GetBytes($ControllerPublicKey)
+)
+
+Write-Host "[PASS] controller lab SSH key ready"
+
+foreach ($Node in @(
+    $Nodes |
+        Where-Object {
+            $_.Role -ne "controller"
+        }
+)) {
 
     Invoke-NodeProvision `
         -Node $Node `
-        -RepoLinux $RepoLinux
+        -RepoLinux $RepoLinux `
+        -ControllerPublicKeyB64 $ControllerPublicKeyB64
 }
 
 

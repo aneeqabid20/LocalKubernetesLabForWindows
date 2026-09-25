@@ -25,6 +25,11 @@ $Node02 = $Config.WSL.Node02
 
 $Bridge = $Config.Network.Bridge
 $ControllerIP = $Config.Nodes.Controller.IP
+$Node01IP = $Config.Nodes.Node01.IP
+$Node02IP = $Config.Nodes.Node02.IP
+$Node01Name = $Config.Nodes.Node01.Hostname
+$Node02Name = $Config.Nodes.Node02.Hostname
+$SshUser = "ubuntu"
 $PrefixLength = ($Config.Network.Subnet -split "/")[1]
 
 New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
@@ -192,6 +197,166 @@ function Wait-Service {
 }
 
 
+function Initialize-ControllerKnownHosts {
+
+    & wsl.exe `
+        -d $Controller `
+        -u root `
+        -- `
+        install `
+        -d `
+        -m 0700 `
+        -o ubuntu `
+        -g ubuntu `
+        /home/ubuntu/.ssh
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to prepare controller SSH directory."
+    }
+
+    foreach ($WorkerIP in @($Node01IP, $Node02IP)) {
+
+        & wsl.exe `
+            -d $Controller `
+            -u $SshUser `
+            -- `
+            test -f /home/ubuntu/.ssh/known_hosts `
+            2>$null
+
+        if ($LASTEXITCODE -eq 0) {
+
+            & wsl.exe `
+                -d $Controller `
+                -u $SshUser `
+                -- `
+                ssh-keygen `
+                -q `
+                -f /home/ubuntu/.ssh/known_hosts `
+                -R $WorkerIP `
+                1>$null `
+                2>$null
+        }
+
+        $ScanCommand = (
+            "umask 077; " +
+            "ssh-keyscan -T 5 -H $WorkerIP " +
+            ">> /home/ubuntu/.ssh/known_hosts"
+        )
+
+        & wsl.exe `
+            -d $Controller `
+            -u $SshUser `
+            -- `
+            /bin/sh -c $ScanCommand `
+            2>$null
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to collect SSH host key for $WorkerIP."
+        }
+
+        & wsl.exe `
+            -d $Controller `
+            -u $SshUser `
+            -- `
+            ssh-keygen `
+            -F $WorkerIP `
+            -f /home/ubuntu/.ssh/known_hosts `
+            1>$null `
+            2>$null
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Controller known_hosts does not contain $WorkerIP."
+        }
+    }
+
+    & wsl.exe `
+        -d $Controller `
+        -u root `
+        -- `
+        chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts
+
+    & wsl.exe `
+        -d $Controller `
+        -u root `
+        -- `
+        chmod 0600 /home/ubuntu/.ssh/known_hosts
+
+    Write-Host "[k8slab] controller SSH known_hosts updated"
+}
+
+
+function Invoke-ControllerSsh {
+    param(
+        [Parameter(Mandatory)]
+        [string]$WorkerIP,
+
+        [Parameter(Mandatory)]
+        [string]$RemoteCommand
+    )
+
+    $Output = @(
+        & wsl.exe `
+            -d $Controller `
+            -u $SshUser `
+            -- `
+            ssh `
+            -o BatchMode=yes `
+            -o ConnectTimeout=5 `
+            "$SshUser@$WorkerIP" `
+            $RemoteCommand `
+            2>&1
+    )
+
+    return @{
+        Output   = $Output
+        ExitCode = $LASTEXITCODE
+    }
+}
+
+
+function Assert-WorkerSshAccess {
+
+    $Workers = @(
+        @{
+            IP       = $Node01IP
+            Hostname = $Node01Name
+        },
+        @{
+            IP       = $Node02IP
+            Hostname = $Node02Name
+        }
+    )
+
+    foreach ($Worker in $Workers) {
+
+        $HostnameResult = Invoke-ControllerSsh `
+            -WorkerIP $Worker.IP `
+            -RemoteCommand "hostname"
+
+        $ActualHostname = (
+            $HostnameResult.Output -join ""
+        ).Trim()
+
+        if (
+            $HostnameResult.ExitCode -ne 0 -or
+            $ActualHostname -ne $Worker.Hostname
+        ) {
+            throw "SSH validation failed for $($Worker.IP): expected hostname '$($Worker.Hostname)', got '$ActualHostname'."
+        }
+
+        $SudoResult = Invoke-ControllerSsh `
+            -WorkerIP $Worker.IP `
+            -RemoteCommand "sudo -n true"
+
+        if ($SudoResult.ExitCode -ne 0) {
+            throw "Passwordless sudo validation failed for $($Worker.IP)."
+        }
+
+        Write-Host "[k8slab] SSH ready: $SshUser@$($Worker.IP) -> $($Worker.Hostname)"
+    }
+}
+
+
 function Test-KubeletConfigured {
     param(
         [Parameter(Mandatory)]
@@ -277,6 +442,11 @@ try {
 
         Wait-Service `
             -Distro $Worker `
+            -Service "ssh.service" `
+            -TimeoutSeconds $WorkerTimeoutSeconds
+
+        Wait-Service `
+            -Distro $Worker `
             -Service "containerd.service" `
             -TimeoutSeconds $WorkerTimeoutSeconds
 
@@ -292,6 +462,9 @@ try {
             Write-Host "[k8slab] $Worker kubelet is not configured by kubeadm yet; skipping kubelet wait."
         }
     }
+
+    Initialize-ControllerKnownHosts
+    Assert-WorkerSshAccess
 
     Write-Host ""
     Write-Host "[k8slab] WSL infrastructure is running."

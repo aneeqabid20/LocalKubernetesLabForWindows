@@ -92,6 +92,56 @@ function Invoke-Wsl {
 }
 
 
+function Invoke-WslAsUser {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Distro,
+
+        [Parameter(Mandatory)]
+        [string]$User,
+
+        [Parameter(Mandatory)]
+        [string[]]$Command
+    )
+
+    $Output = & wsl.exe `
+        -d $Distro `
+        -u $User `
+        -- `
+        @Command `
+        2>&1
+
+    return @{
+        Output   = $Output
+        ExitCode = $LASTEXITCODE
+    }
+}
+
+
+function Invoke-ControllerSsh {
+    param(
+        [Parameter(Mandatory)]
+        [string]$WorkerIP,
+
+        [Parameter(Mandatory)]
+        [string]$RemoteCommand
+    )
+
+    return Invoke-WslAsUser `
+        -Distro $Controller `
+        -User "ubuntu" `
+        -Command @(
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "ubuntu@$WorkerIP",
+            $RemoteCommand
+        )
+}
+
+
 function Invoke-Kubectl {
     param(
         [Parameter(Mandatory)]
@@ -187,6 +237,10 @@ try {
         Test-Service `
             -Distro $Worker `
             -Service "k8slab-netns.service"
+
+        Test-Service `
+            -Distro $Worker `
+            -Service "ssh.service"
 
         Test-Service `
             -Distro $Worker `
@@ -330,10 +384,151 @@ try {
 
 
     #
-    # 5. NAT
+    # 5. Worker SSH
     #
     Write-Host ""
-    Write-Host "===== 5. WORKER NAT ====="
+    Write-Host "===== 5. WORKER SSH ====="
+
+    $SshWorkers = @(
+        @{
+            Distro   = $Node01
+            IP       = $Node01IP
+            Hostname = $Node01Name
+            Namespace = $Node01NS
+        },
+        @{
+            Distro   = $Node02
+            IP       = $Node02IP
+            Hostname = $Node02Name
+            Namespace = $Node02NS
+        }
+    )
+
+    foreach ($Worker in $SshWorkers) {
+
+        $NamespacePathResult = Invoke-Wsl `
+            -Distro $Worker.Distro `
+            -Command @(
+                "systemctl",
+                "show",
+                "ssh.service",
+                "-p",
+                "NetworkNamespacePath"
+            )
+
+        $ExpectedNamespacePath = "/run/netns/$($Worker.Namespace)"
+        $ExpectedNamespaceProperty = "NetworkNamespacePath=$ExpectedNamespacePath"
+        $ActualNamespaceProperty = (
+            $NamespacePathResult.Output -join ""
+        ).Trim()
+
+        if (
+            $NamespacePathResult.ExitCode -eq 0 -and
+            $ActualNamespaceProperty -eq $ExpectedNamespaceProperty
+        ) {
+            Pass "$($Worker.Distro) $ActualNamespaceProperty"
+        }
+        else {
+            Fail "$($Worker.Distro) ssh.service expected $ExpectedNamespaceProperty, got $ActualNamespaceProperty"
+        }
+
+        $SshSocketState = Invoke-Wsl `
+            -Distro $Worker.Distro `
+            -Command @(
+                "systemctl",
+                "is-enabled",
+                "ssh.socket"
+            )
+
+        $SshSocketText = (
+            $SshSocketState.Output -join ""
+        ).Trim()
+
+        if ($SshSocketText -eq "masked") {
+            Pass "$($Worker.Distro) ssh.socket masked"
+        }
+        else {
+            Fail "$($Worker.Distro) ssh.socket expected masked, got $SshSocketText"
+        }
+
+        $Listener = Invoke-Wsl `
+            -Distro $Worker.Distro `
+            -Command @(
+                "ip",
+                "netns",
+                "exec",
+                $Worker.Namespace,
+                "ss",
+                "-lntp"
+            )
+
+        $ListenerText = $Listener.Output -join "`n"
+
+        if (
+            $Listener.ExitCode -eq 0 -and
+            $ListenerText -match ':22\s' -and
+            $ListenerText -match 'sshd'
+        ) {
+            Pass "$($Worker.Distro) sshd listening on port 22 inside worker namespace"
+        }
+        else {
+            Fail "$($Worker.Distro) sshd port 22 listener missing from worker namespace"
+        }
+
+        $HostnameResult = Invoke-ControllerSsh `
+            -WorkerIP $Worker.IP `
+            -RemoteCommand "hostname"
+
+        $ActualHostname = (
+            $HostnameResult.Output -join ""
+        ).Trim()
+
+        if (
+            $HostnameResult.ExitCode -eq 0 -and
+            $ActualHostname -eq $Worker.Hostname
+        ) {
+            Pass "controller SSH -> $($Worker.IP) hostname = $ActualHostname"
+        }
+        else {
+            Fail "controller SSH -> $($Worker.IP) expected hostname $($Worker.Hostname), got $ActualHostname"
+        }
+
+        $SudoResult = Invoke-ControllerSsh `
+            -WorkerIP $Worker.IP `
+            -RemoteCommand "sudo -n true"
+
+        if ($SudoResult.ExitCode -eq 0) {
+            Pass "controller SSH -> $($Worker.IP) passwordless sudo"
+        }
+        else {
+            Fail "controller SSH -> $($Worker.IP) passwordless sudo failed"
+        }
+
+        $KubeletResult = Invoke-ControllerSsh `
+            -WorkerIP $Worker.IP `
+            -RemoteCommand "sudo -n systemctl is-active kubelet"
+
+        $KubeletText = (
+            $KubeletResult.Output -join ""
+        ).Trim()
+
+        if (
+            $KubeletResult.ExitCode -eq 0 -and
+            $KubeletText -eq "active"
+        ) {
+            Pass "controller SSH -> $($Worker.IP) kubelet active"
+        }
+        else {
+            Fail "controller SSH -> $($Worker.IP) kubelet expected active, got $KubeletText"
+        }
+    }
+
+
+    #
+    # 6. NAT
+    #
+    Write-Host ""
+    Write-Host "===== 6. WORKER NAT ====="
 
     $NatResult = Invoke-Wsl `
         -Distro $Controller `
@@ -359,10 +554,10 @@ try {
 
 
     #
-    # 6. Inotify
+    # 7. Inotify
     #
     Write-Host ""
-    Write-Host "===== 6. WSL KERNEL LIMIT ====="
+    Write-Host "===== 7. WSL KERNEL LIMIT ====="
 
     $Inotify = Invoke-Wsl `
         -Distro $Controller `
@@ -386,10 +581,10 @@ try {
 
 
     #
-    # 7. Kubernetes nodes
+    # 8. Kubernetes nodes
     #
     Write-Host ""
-    Write-Host "===== 7. KUBERNETES NODES ====="
+    Write-Host "===== 8. KUBERNETES NODES ====="
 
     $NodeCheck = Invoke-Kubectl `
         -Arguments @(
@@ -478,10 +673,10 @@ try {
 
 
     #
-    # 8. Cilium
+    # 9. Cilium
     #
     Write-Host ""
-    Write-Host "===== 8. CILIUM ====="
+    Write-Host "===== 9. CILIUM ====="
 
     $Cilium = Invoke-Wsl `
         -Distro $Controller `
@@ -506,10 +701,10 @@ try {
 
 
     #
-    # 9. Temporary verification workloads
+    # 10. Temporary verification workloads
     #
     Write-Host ""
-    Write-Host "===== 9. TEST WORKLOADS ====="
+    Write-Host "===== 10. TEST WORKLOADS ====="
 
     Invoke-Kubectl `
         -Arguments @(
@@ -676,10 +871,10 @@ spec:
 
 
     #
-    # 10. Pod-to-Pod connectivity
+    # 11. Pod-to-Pod connectivity
     #
     Write-Host ""
-    Write-Host "===== 10. POD NETWORK ====="
+    Write-Host "===== 11. POD NETWORK ====="
 
     $ConnectivityTests = @(
         @{
@@ -757,10 +952,10 @@ spec:
 
 
     #
-    # 11. DNS
+    # 12. DNS
     #
     Write-Host ""
-    Write-Host "===== 11. CLUSTER DNS ====="
+    Write-Host "===== 12. CLUSTER DNS ====="
 
     $DNS = Invoke-Kubectl `
         -Arguments @(
@@ -785,10 +980,10 @@ spec:
 
 
     #
-    # 12. ClusterIP
+    # 13. ClusterIP
     #
     Write-Host ""
-    Write-Host "===== 12. CLUSTERIP SERVICE ====="
+    Write-Host "===== 13. CLUSTERIP SERVICE ====="
 
     $ServiceHTTP = Invoke-Kubectl `
         -Arguments @(

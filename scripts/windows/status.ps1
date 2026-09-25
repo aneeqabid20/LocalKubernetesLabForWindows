@@ -137,6 +137,7 @@ Show-DistroStatus `
     -Distro $Node01 `
     -Services @(
         "k8slab-netns.service",
+        "ssh.service",
         "containerd.service",
         "kubelet.service"
     )
@@ -145,6 +146,7 @@ Show-DistroStatus `
     -Distro $Node02 `
     -Services @(
         "k8slab-netns.service",
+        "ssh.service",
         "containerd.service",
         "kubelet.service"
     )
