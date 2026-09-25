@@ -117,13 +117,13 @@ Root shell:
 .\lab.ps1 shell -Node node01 -Root
 ```
 
-`ssh` is kept as a compatibility alias with the Mac lab workflow:
+`ssh` is also available as a command alias:
 
 ```powershell
 .\lab.ps1 ssh -Node node01
 ```
 
-On WSL2 this opens a native WSL node console; no SSH daemon is required.
+This command opens the selected WSL node console. Worker SSH is configured separately for controller-to-worker access.
 
 ## Infrastructure-only setup
 
